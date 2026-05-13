@@ -546,6 +546,12 @@ section { padding: var(--pad-section) 0; }
   border-color: rgba(255,255,255,0.08);
 }
 .product-card.dark p { color: #a1a1a6; }
+/* Force light headings on dark product cards in BOTH themes
+   (h1-h4 default to var(--fg-strong) which is dark in light mode). */
+.product-card.dark h1,
+.product-card.dark h2,
+.product-card.dark h3,
+.product-card.dark h4 { color: #f5f5f7; }
 .product-tag { font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; }
 .product-card h3 { font-size: clamp(26px, 2.4vw, 36px); margin: 14px 0 12px; letter-spacing: -0.02em; }
 .product-card .product-foot { margin-top: auto; }
