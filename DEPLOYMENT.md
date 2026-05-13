@@ -245,3 +245,174 @@ A minimal pipeline (GitHub Actions, GitLab CI, etc.) should:
   simply by pointing `REACT_APP_BACKEND_URL` at whichever backend is live.
 
 There are no visual, behavioural, or API changes in this refactor.
+
+---
+
+## 10. Provider quick-start
+
+Concrete commands for the most common deployment targets. Pick one for the
+**frontend** (static SPA) and one for the **backend** (HTTP service).
+
+### Frontend → Vercel
+
+```bash
+npm i -g vercel
+cd frontend
+vercel link
+vercel env add REACT_APP_BACKEND_URL    # paste your backend URL
+vercel --prod
+```
+
+`vercel.json` (optional, place inside `frontend/`):
+
+```json
+{
+  "framework": "vite",
+  "buildCommand": "yarn build",
+  "outputDirectory": "build",
+  "installCommand": "yarn install --frozen-lockfile",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
+```
+
+### Frontend → Cloudflare Pages / Netlify
+
+- Build command: `yarn build`
+- Output directory: `build`
+- Env var: `REACT_APP_BACKEND_URL`
+- SPA fallback: rewrite all paths to `/index.html`.
+
+### Backend (Bun) → Railway
+
+```bash
+# In the Railway dashboard:
+# 1. New project → Deploy from GitHub repo → choose this repo
+# 2. Root directory: backend-bun
+# 3. Detected: Dockerfile (auto-selected)
+# 4. Variables: MONGO_URL, DB_NAME, CORS_ORIGINS
+# 5. Generate a Railway domain or attach a custom one
+```
+
+Healthcheck path: `/healthz`. Start command: provided by Dockerfile CMD.
+
+### Backend (Bun) → Fly.io
+
+`backend-bun/fly.toml`:
+
+```toml
+app = "sync-backend-bun"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8001"
+  LOG_LEVEL = "info"
+
+[http_service]
+  internal_port = 8001
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "20s"
+    method = "get"
+    path = "/healthz"
+    timeout = "3s"
+```
+
+```bash
+cd backend-bun
+fly launch --no-deploy        # if first time
+fly secrets set MONGO_URL=... DB_NAME=... CORS_ORIGINS=...
+fly deploy
+```
+
+### Backend (Bun) → Render
+
+- New → Web Service → Docker → root `backend-bun`.
+- Health check path: `/healthz`.
+- Env vars: `MONGO_URL`, `DB_NAME`, `CORS_ORIGINS` (and optionally `LOG_LEVEL`).
+
+### Backend (FastAPI) → Railway / Render / Fly
+
+Same providers; point at `backend/` and use the start command:
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port $PORT
+```
+
+Add `/healthz` if you need a dedicated probe (currently the FastAPI app uses
+`/api/` for liveness).
+
+---
+
+## 11. Recommended healthcheck endpoints
+
+| Component        | Path           | Method | Expected                  | Use as           |
+|------------------|----------------|:------:|----------------------------|------------------|
+| Bun backend      | `/healthz`     | GET    | `200` + `{"ok":true}`      | liveness, readiness |
+| Bun backend      | `/api/`        | GET    | `200` + hello payload      | smoke / synthetic  |
+| FastAPI backend  | `/api/`        | GET    | `200` + hello payload      | liveness, readiness |
+| Frontend (CDN)   | `/index.html`  | GET    | `200`                      | edge synthetic     |
+
+Configure your uptime monitor to alert if any of these returns non-2xx for
+≥ 2 consecutive checks at 60 s intervals.
+
+---
+
+## 12. Reliability — logging, error handling, monitoring
+
+Implementation is already in place; this section documents the *intent* so
+ops teams can wire dashboards/alerts without re-reading code.
+
+### Logging
+
+- **Format**: single-line JSON to stdout (Bun backend uses `lib/logger.ts`,
+  FastAPI uses the stdlib `logging` module). Forward stdout/stderr from the
+  platform (Railway/Fly/Render/K8s) into Loki, Datadog, or CloudWatch.
+- **Levels**: use `LOG_LEVEL=info` in production, `debug` only when actively
+  troubleshooting (Bun JSON logs include `level` and `ts` fields).
+- **Correlation**: when you add multi-service flows, attach `X-Request-Id` at
+  the edge (Cloudflare / nginx / Vercel) and log it on each request.
+
+### Error handling
+
+- The Bun backend has a global `app.onError` that returns
+  `500 { detail: "Internal Server Error" }` and logs the stack — no
+  user-facing stack traces.
+- FastAPI returns 422 with a structured `detail` array on validation
+  errors (`StatusCheckCreate`). The Bun implementation matches this format
+  via Zod issues mapping.
+- Both backends close their Mongo client on `SIGTERM`/`SIGINT`. Configure
+  your platform's stop signal to `SIGTERM` and stop grace ≥ 10 s.
+
+### Monitoring & alerting
+
+Minimum viable production alerting (Cloudwatch / Grafana / Datadog):
+
+| Signal                                           | Threshold                  | Action               |
+|--------------------------------------------------|----------------------------|----------------------|
+| 5xx rate on `/api/*`                             | > 1% over 5 min            | page on-call         |
+| p95 latency on `/api/*`                          | > 800 ms over 10 min       | warn                 |
+| `/healthz` returning `mongoOk:false`             | 2 consecutive checks       | page on-call         |
+| RSS memory on a backend instance                 | > 80% of limit for 10 min  | scale out / restart  |
+| Mongo connection pool exhaustion                 | any                        | warn + investigate   |
+| Frontend CDN 5xx                                 | > 0.1% over 5 min          | warn                 |
+
+### Suggested next reliability investments
+
+(Documented, intentionally not implemented to preserve credits.)
+
+- **OpenTelemetry**: drop `@hono/otel` and `opentelemetry-instrumentation-mongodb`
+  into the Bun service; export OTLP to your APM. ~20 LOC change.
+- **Request ID middleware**: 5 LOC in Hono (`crypto.randomUUID()` + `c.set/header`).
+- **Rate limiting**: `hono-rate-limiter` at the edge or `hono/cf-rate-limiter`
+  on Cloudflare Workers if you front the API there.
+- **Sentry**: official SDKs exist for both FastAPI and Bun (Sentry Node SDK
+  works under Bun).
+
