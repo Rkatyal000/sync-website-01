@@ -53,21 +53,23 @@ pointed at either implementation without modification.
 
 ### `backend/.env` (FastAPI)
 
-| Variable        | Required | Description                              |
-|-----------------|:--------:|------------------------------------------|
-| `MONGO_URL`     | yes      | MongoDB connection string                |
-| `DB_NAME`       | yes      | MongoDB database name                    |
-| `CORS_ORIGINS`  | no       | Comma-separated origins, default `*`     |
+| Variable             | Required | Description                                          |
+|----------------------|:--------:|------------------------------------------------------|
+| `MONGO_URL`          | yes      | MongoDB connection string                            |
+| `DB_NAME`            | yes      | MongoDB database name                                |
+| `CORS_ORIGINS`       | no       | Comma-separated origins, default `*`                 |
+| `LEADS_EXPORT_TOKEN` | no       | If set, `GET /api/leads/export` requires header `X-Export-Token: <value>` |
 
 ### `backend-bun/.env` (Bun)
 
 Same as above, plus:
 
-| Variable        | Required | Default     | Description                          |
-|-----------------|:--------:|-------------|--------------------------------------|
-| `HOST`          | no       | `0.0.0.0`   | Bind interface                       |
-| `PORT`          | no       | `8001`      | Listen port                          |
-| `LOG_LEVEL`     | no       | `info`      | `debug` / `info` / `warn` / `error`  |
+| Variable             | Required | Default     | Description                          |
+|----------------------|:--------:|-------------|--------------------------------------|
+| `HOST`               | no       | `0.0.0.0`   | Bind interface                       |
+| `PORT`               | no       | `8001`      | Listen port                          |
+| `LOG_LEVEL`          | no       | `info`      | `debug` / `info` / `warn` / `error`  |
+| `LEADS_EXPORT_TOKEN` | no       | —           | Shared secret for `/api/leads/export` (recommended in production) |
 
 ---
 
@@ -415,4 +417,73 @@ Minimum viable production alerting (Cloudwatch / Grafana / Datadog):
   on Cloudflare Workers if you front the API there.
 - **Sentry**: official SDKs exist for both FastAPI and Bun (Sentry Node SDK
   works under Bun).
+
+---
+
+## 13. Lead capture API
+
+The Contact and Newsletter forms write to the same lightweight endpoint;
+leads are stored in MongoDB collection `leads`.
+
+### `POST /api/leads`
+
+Request body (only `email` is required):
+
+```json
+{
+  "name": "Ada Lovelace",
+  "email": "ada@example.com",
+  "company": "Analytical Engines",
+  "role": "Director of Insights",
+  "interest": "Cross-Media Measurement",
+  "describes_you": "Advertiser",
+  "message": "Free-form text from the contact form",
+  "source": "contact"
+}
+```
+
+`source` is one of `"contact" | "newsletter" | "other"` (default `"contact"`).
+Email is lower-cased + trimmed before insert.
+
+Responses:
+
+- `201 Created` → returns the stored `Lead` (with `id` + `timestamp`).
+- `422 Unprocessable Entity` → validation failed (invalid email, etc).
+
+### `GET /api/leads/export`
+
+Returns all leads as a UTF-8 CSV. Filename: `leads-YYYY-MM-DD.csv`.
+
+```bash
+# Public if LEADS_EXPORT_TOKEN is not set
+curl -O -J https://api.example.com/api/leads/export
+
+# Gated by a shared secret in production (recommended)
+curl -O -J -H "X-Export-Token: <secret>" https://api.example.com/api/leads/export
+```
+
+> **Production recommendation**: always set `LEADS_EXPORT_TOKEN` in your
+> platform secret manager so the export endpoint cannot be discovered and
+> scraped. Combine with an IP allowlist at the edge if your platform
+> supports it (Cloudflare Access, AWS WAF, Fly.io firewall).
+
+### Storage
+
+```
+db.leads = {
+  id:            "<uuid>",
+  timestamp:     "<ISO-8601 string>",
+  source:        "contact" | "newsletter" | "other",
+  email:         "<lowercased>",
+  name:          string | null,
+  company:       string | null,
+  role:          string | null,
+  interest:      string | null,
+  describes_you: string | null,
+  message:       string | null
+}
+```
+
+Indexes (created automatically on startup):
+`{ timestamp: -1 }` for export ordering, `{ email: 1 }` for future de-dup.
 

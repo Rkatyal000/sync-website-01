@@ -41,7 +41,7 @@ export default function Contact() {
     e.preventDefault();
     try {
       setBusy(true);
-      await axios.post(`${API}/contact`, form);
+      await axios.post(`${API}/leads`, { ...form, source: "contact" });
       toast.success("Thanks — we'll be in touch shortly.");
       setForm({
         name: "",

@@ -14,7 +14,7 @@ export default function Footer() {
     if (!email) return;
     try {
       setBusy(true);
-      await axios.post(`${API}/newsletter`, { email });
+      await axios.post(`${API}/leads`, { email, source: "newsletter" });
       toast.success("You're in. We'll be in touch.");
       setEmail("");
     } catch (err) {

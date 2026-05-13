@@ -20,6 +20,7 @@ import { config } from "./lib/config.ts";
 import { logger } from "./lib/logger.ts";
 import { getDb, closeDb } from "./lib/db.ts";
 import { statusRouter } from "./routes/status.ts";
+import { leadsRouter } from "./routes/leads.ts";
 
 const app = new Hono();
 
@@ -60,6 +61,7 @@ app.get("/healthz", async (c) => {
 const api = new Hono();
 api.get("/", (c) => c.json({ message: "Hello World" }));
 api.route("/status", statusRouter);
+api.route("/leads", leadsRouter);
 app.route("/api", api);
 
 // ---- error handler --------------------------------------------------------
@@ -71,7 +73,12 @@ app.onError((err, c) => {
 // ---- startup --------------------------------------------------------------
 async function main() {
   // Warm the Mongo pool before accepting traffic.
-  await getDb();
+  const db = await getDb();
+  // Best-effort indexes — match the FastAPI startup hook.
+  await Promise.all([
+    db.collection("leads").createIndex({ timestamp: -1 }),
+    db.collection("leads").createIndex({ email: 1 }),
+  ]).catch((err) => logger.warn("Index creation failed", { err: String(err) }));
   logger.info(`Server listening on ${config.host}:${config.port}`);
 }
 
